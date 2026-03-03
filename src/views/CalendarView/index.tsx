@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { format, startOfMonth, endOfMonth, parseISO } from 'date-fns';
+import { format, startOfMonth, endOfMonth, parseISO, isValid, isSameMonth } from 'date-fns';
 import { useMetricsStore } from '@/stores';
 import { getTrades } from '@/api/trades';
 import type { TradeWithDerived } from '@/types';
@@ -10,12 +10,39 @@ import MonthlyCalendar from '@/components/MonthlyCalendar';
 export default function CalendarView() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const selectedDate = searchParams.get('date');
+  const monthParam = searchParams.get('month');
+
+  const [currentDate, setCurrentDate] = useState(() => {
+    if (monthParam) {
+      const parsedMonth = parseISO(`${monthParam}-01`);
+      if (isValid(parsedMonth)) {
+        return startOfMonth(parsedMonth);
+      }
+    }
+
+    if (selectedDate) {
+      const parsedDate = parseISO(selectedDate);
+      if (isValid(parsedDate)) {
+        return startOfMonth(parsedDate);
+      }
+    }
+
+    return startOfMonth(new Date());
+  });
   const [dayTrades, setDayTrades] = useState<TradeWithDerived[]>([]);
   const { dailyPerformance, fetchDailyPerformance, setDateRange, isLoading } = useMetricsStore();
 
-  // Get selected date from URL params
-  const selectedDate = searchParams.get('date');
+  useEffect(() => {
+    if (!monthParam) return;
+    const parsedMonth = parseISO(`${monthParam}-01`);
+    if (!isValid(parsedMonth)) return;
+    const normalized = startOfMonth(parsedMonth);
+
+    if (!isSameMonth(currentDate, normalized)) {
+      setCurrentDate(normalized);
+    }
+  }, [monthParam, currentDate]);
 
   useEffect(() => {
     const start = startOfMonth(currentDate);
@@ -38,16 +65,22 @@ export default function CalendarView() {
   }, [selectedDate]);
 
   const handleMonthChange = (date: Date) => {
-    setCurrentDate(date);
-    setSearchParams({});
+    const normalized = startOfMonth(date);
+    setCurrentDate(normalized);
+    setSearchParams({ month: format(normalized, 'yyyy-MM') });
   };
 
   const handleDayClick = (date: string) => {
-    setSearchParams({ date });
+    setSearchParams({
+      month: format(startOfMonth(currentDate), 'yyyy-MM'),
+      date,
+    });
   };
 
   const handleCloseDetail = () => {
-    setSearchParams({});
+    setSearchParams({
+      month: format(startOfMonth(currentDate), 'yyyy-MM'),
+    });
   };
 
   return (

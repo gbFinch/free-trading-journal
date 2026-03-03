@@ -278,5 +278,29 @@ describe("CalendarView", () => {
         expect(screen.getByText("January 15, 2024")).toBeInTheDocument();
       });
     });
+
+    it("restores selected month from URL params", () => {
+      renderWithRouter(["/calendar?month=2023-12"]);
+
+      expect(screen.getByText("December 2023")).toBeInTheDocument();
+      expect(mockSetDateRange).toHaveBeenCalledWith({
+        start: "2023-12-01",
+        end: "2023-12-31",
+      });
+    });
+
+    it("infers selected month from selected date when month param is missing", async () => {
+      vi.useRealTimers();
+      renderWithRouter(["/calendar?date=2023-12-15"]);
+
+      await waitFor(() => {
+        expect(screen.getByText("December 2023")).toBeInTheDocument();
+      });
+
+      expect(mockSetDateRange).toHaveBeenCalledWith({
+        start: "2023-12-01",
+        end: "2023-12-31",
+      });
+    });
   });
 });
