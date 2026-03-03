@@ -139,6 +139,7 @@ export default function DashboardMetrics({ metrics }: DashboardMetricsProps) {
             {formatCurrency(metrics.total_net_pnl)}
           </span>
         </div>
+        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Across all recorded trades</p>
       </div>
 
       {/* Profit Factor Card */}
@@ -155,6 +156,7 @@ export default function DashboardMetrics({ metrics }: DashboardMetricsProps) {
           </span>
           <DonutChart winPercent={winPercent} lossPercent={lossPercent} />
         </div>
+        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Gross profit divided by gross loss</p>
       </div>
 
       {/* Trade Win % Card */}
@@ -176,6 +178,7 @@ export default function DashboardMetrics({ metrics }: DashboardMetricsProps) {
             </div>
           </div>
         </div>
+        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Win consistency by closed outcomes</p>
       </div>
 
       {/* Avg Win/Loss Trade Card */}
@@ -194,6 +197,7 @@ export default function DashboardMetrics({ metrics }: DashboardMetricsProps) {
             )}
           </div>
         </div>
+        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Average gain to average loss ratio</p>
       </div>
 
       {/* Trade Expectancy Card */}
@@ -214,6 +218,7 @@ export default function DashboardMetrics({ metrics }: DashboardMetricsProps) {
             {metrics.expectancy !== null ? formatCurrency(metrics.expectancy) : 'N/A'}
           </span>
         </div>
+        <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">Expected value per trade</p>
       </div>
     </div>
   );
