@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import { useTradesStore, useAccountsStore, useImportStore } from '@/stores';
@@ -25,9 +25,60 @@ function formatCompactCurrency(value: number): string {
   }).format(value);
 }
 
+function parseTimeToMinutes(time: string): number | null {
+  const parts = time.split(':');
+  if (parts.length < 2) return null;
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
+function getTradeDurationMinutes(entryTime: string | null, exitTime: string | null): number | null {
+  if (!entryTime || !exitTime) return null;
+
+  const entryMinutes = parseTimeToMinutes(entryTime);
+  const exitMinutes = parseTimeToMinutes(exitTime);
+  if (entryMinutes === null || exitMinutes === null) return null;
+
+  let diff = exitMinutes - entryMinutes;
+  if (diff < 0) {
+    diff += 24 * 60;
+  }
+  return diff;
+}
+
+function formatTradeDuration(entryTime: string | null, exitTime: string | null): string {
+  const totalMinutes = getTradeDurationMinutes(entryTime, exitTime);
+  if (totalMinutes === null) return '-';
+
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 type DensityMode = 'tight' | 'comfortable';
 type ViewPreset = 'all' | 'wins' | 'losses' | 'open';
 type NetPnlSortMode = 'none' | 'desc' | 'asc';
+type DurationSortMode = 'none' | 'desc' | 'asc';
+
+function normalizeDurationForSort(entryTime: string | null, exitTime: string | null): number {
+  const minutes = getTradeDurationMinutes(entryTime, exitTime);
+  return minutes === null ? -1 : minutes;
+}
+
+function nextSortMode(current: 'none' | 'desc' | 'asc'): 'none' | 'desc' | 'asc' {
+  if (current === 'none') return 'desc';
+  if (current === 'desc') return 'asc';
+  return 'none';
+}
+
+function sortArrow(mode: 'none' | 'desc' | 'asc'): string {
+  if (mode === 'desc') return '▼';
+  if (mode === 'asc') return '▲';
+  return '↕';
+}
 
 function rowSpacingClass(density: DensityMode): string {
   return density === 'tight' ? 'py-2' : 'py-3';
@@ -101,6 +152,9 @@ function TradeRow({ trade, index, density, isSelected, onToggleSelect, onClick }
       <td className={clsx('whitespace-nowrap px-4 text-right text-sm text-stone-700 dark:text-stone-200', pad)}>${trade.entry_price.toFixed(2)}</td>
       <td className={clsx('whitespace-nowrap px-4 text-right text-sm text-stone-600 dark:text-stone-300', pad)}>{trade.exit_price ? `$${trade.exit_price.toFixed(2)}` : '-'}</td>
       <td className={clsx('whitespace-nowrap px-4 text-right text-sm text-stone-600 dark:text-stone-300', pad)}>{trade.quantity?.toFixed(0) ?? '-'}</td>
+      <td className={clsx('whitespace-nowrap px-4 text-right text-sm text-stone-600 dark:text-stone-300', pad)}>
+        {formatTradeDuration(trade.entry_time, trade.exit_time)}
+      </td>
       <td className={clsx('whitespace-nowrap px-4 text-right font-semibold', pad, netPnl > 0 ? 'text-green-600 dark:text-green-400' : netPnl < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400')}>
         <span className="inline-flex items-center gap-1">
           <span aria-hidden="true" className="text-xs">{netPnl > 0 ? '▲' : netPnl < 0 ? '▼' : '•'}</span>
@@ -133,12 +187,16 @@ interface StatCardProps {
   value: string;
   valueClass?: string;
   hint?: string;
+  icon: ReactNode;
 }
 
-function StatCard({ label, value, valueClass, hint }: StatCardProps) {
+function StatCard({ label, value, valueClass, hint, icon }: StatCardProps) {
   return (
     <div className="app-muted-panel rounded-xl border border-stone-200/80 px-4 py-3 dark:border-stone-700/70">
-      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">{label}</p>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">{label}</p>
+        <span className="text-stone-400 dark:text-stone-500">{icon}</span>
+      </div>
       <p className={clsx('mt-1 text-2xl font-bold leading-none text-stone-900 dark:text-stone-100', valueClass)}>{value}</p>
       {hint && <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">{hint}</p>}
     </div>
@@ -153,6 +211,7 @@ export default function TradeList() {
   const [density, setDensity] = useState<DensityMode>('tight');
   const [viewPreset, setViewPreset] = useState<ViewPreset>('all');
   const [netPnlSort, setNetPnlSort] = useState<NetPnlSortMode>('none');
+  const [durationSort, setDurationSort] = useState<DurationSortMode>('none');
 
   const { trades, fetchTrades, deleteTrades, isLoading } = useTradesStore();
   const { accounts, selectedAccountId } = useAccountsStore();
@@ -170,10 +229,20 @@ export default function TradeList() {
   }, [trades, viewPreset]);
 
   const orderedTrades = useMemo(() => {
-    if (netPnlSort === 'none') return visibleTrades;
-    const sorted = [...visibleTrades].sort((a, b) => (a.net_pnl ?? 0) - (b.net_pnl ?? 0));
-    return netPnlSort === 'asc' ? sorted : sorted.reverse();
-  }, [visibleTrades, netPnlSort]);
+    if (durationSort !== 'none') {
+      const sorted = [...visibleTrades].sort(
+        (a, b) => normalizeDurationForSort(a.entry_time, a.exit_time) - normalizeDurationForSort(b.entry_time, b.exit_time)
+      );
+      return durationSort === 'asc' ? sorted : sorted.reverse();
+    }
+
+    if (netPnlSort !== 'none') {
+      const sorted = [...visibleTrades].sort((a, b) => (a.net_pnl ?? 0) - (b.net_pnl ?? 0));
+      return netPnlSort === 'asc' ? sorted : sorted.reverse();
+    }
+
+    return visibleTrades;
+  }, [visibleTrades, netPnlSort, durationSort]);
 
   useEffect(() => {
     setSelectedTradeIds(current => {
@@ -221,11 +290,13 @@ export default function TradeList() {
   };
 
   const toggleNetPnlSort = () => {
-    setNetPnlSort(current => {
-      if (current === 'none') return 'desc';
-      if (current === 'desc') return 'asc';
-      return 'none';
-    });
+    setNetPnlSort(current => nextSortMode(current));
+    setDurationSort('none');
+  };
+
+  const toggleDurationSort = () => {
+    setDurationSort(current => nextSortMode(current));
+    setNetPnlSort('none');
   };
 
   const handleBulkDelete = async () => {
@@ -262,18 +333,42 @@ export default function TradeList() {
             label="Total Trades"
             value={String(orderedTrades.length)}
             hint={orderedTrades.length === 1 ? 'Trade in current view' : 'Trades in current view'}
+            icon={
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 5h16M4 12h16M4 19h16" />
+              </svg>
+            }
           />
-          <StatCard label="Closed Trades" value={String(stats.closedCount)} hint="Positions with completed lifecycle" />
+          <StatCard
+            label="Closed Trades"
+            value={String(stats.closedCount)}
+            hint="Positions with completed lifecycle"
+            icon={
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            }
+          />
           <StatCard
             label="Win Rate"
             value={stats.winRate}
             hint={stats.resolvedCount > 0 ? `${stats.resolvedCount} resolved results` : 'No resolved results yet'}
+            icon={
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4-4 3 3 5-7 4 5" />
+              </svg>
+            }
           />
           <StatCard
             label="Portfolio Net"
             value={formatCompactCurrency(stats.totalNet)}
             valueClass={stats.totalNet > 0 ? 'text-emerald-600 dark:text-emerald-400' : stats.totalNet < 0 ? 'text-rose-600 dark:text-rose-400' : undefined}
             hint="Aggregate net outcome"
+            icon={
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l6-6 4 4 8-8" />
+              </svg>
+            }
           />
         </div>
       </section>
@@ -378,13 +473,25 @@ export default function TradeList() {
                   <th className="border-b border-stone-200 px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-stone-500 dark:border-stone-700 dark:text-stone-400">Qty</th>
                   <th className="border-b border-stone-200 px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-stone-500 dark:border-stone-700 dark:text-stone-400">
                     <button
+                      onClick={toggleDurationSort}
+                      className="inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-stone-200/70 dark:hover:bg-stone-700/60"
+                      title="Sort by Duration"
+                    >
+                      Duration
+                      <span aria-hidden="true" className="text-[10px]">
+                        {sortArrow(durationSort)}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="border-b border-stone-200 px-4 py-2 text-right text-xs font-medium uppercase tracking-wider text-stone-500 dark:border-stone-700 dark:text-stone-400">
+                    <button
                       onClick={toggleNetPnlSort}
                       className="inline-flex items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-stone-200/70 dark:hover:bg-stone-700/60"
                       title="Sort by Net P&L"
                     >
                       Net P&L
                       <span aria-hidden="true" className="text-[10px]">
-                        {netPnlSort === 'desc' ? '▼' : netPnlSort === 'asc' ? '▲' : '↕'}
+                        {sortArrow(netPnlSort)}
                       </span>
                     </button>
                   </th>
