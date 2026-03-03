@@ -22,6 +22,21 @@ body {
     radial-gradient(circle at 90% 10%, rgba(217, 119, 6, 0.06), transparent 35%);
 }
 
+/* Prevent text selection in app widgets by default. */
+#root {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Keep editable controls selectable. */
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 #root {
   min-height: 100vh;
 }
