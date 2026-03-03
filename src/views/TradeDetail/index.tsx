@@ -16,10 +16,32 @@ function formatCurrency(value: number | null): string {
   }).format(value);
 }
 
+function formatCompactCurrency(value: number | null): string {
+  if (value === null) return '-';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 1,
+    notation: 'compact',
+  }).format(value);
+}
+
 function formatNumber(value: number | null, decimals = 2): string {
   if (value === null) return '-';
   if (!isFinite(value)) return 'Infinite';
   return value.toFixed(decimals);
+}
+
+function pnlClass(value: number | null | undefined): string {
+  if ((value ?? 0) > 0) return 'text-emerald-600 dark:text-emerald-400';
+  if ((value ?? 0) < 0) return 'text-rose-600 dark:text-rose-400';
+  return 'text-stone-700 dark:text-stone-200';
+}
+
+function resultClass(result: string | null | undefined): string {
+  if (result === 'win') return 'text-emerald-600 dark:text-emerald-400';
+  if (result === 'loss') return 'text-rose-600 dark:text-rose-400';
+  return 'text-stone-700 dark:text-stone-200';
 }
 
 interface DetailRowProps {
@@ -30,9 +52,59 @@ interface DetailRowProps {
 
 function DetailRow({ label, value, valueClass }: DetailRowProps) {
   return (
-    <div className="flex justify-between py-2 border-b border-gray-100 dark:border-gray-700">
-      <span className="text-gray-500 dark:text-gray-400">{label}</span>
-      <span className={clsx('font-medium dark:text-gray-100', valueClass)}>{value}</span>
+    <div className="flex items-center justify-between gap-4 border-b border-stone-200 py-2.5 last:border-b-0 dark:border-stone-700">
+      <span className="text-sm text-stone-500 dark:text-stone-400">{label}</span>
+      <span className={clsx('text-sm font-semibold text-stone-800 dark:text-stone-100', valueClass)}>{value}</span>
+    </div>
+  );
+}
+
+interface StatCardProps {
+  label: string;
+  value: string;
+  valueClass?: string;
+  hint?: string;
+}
+
+function StatCard({ label, value, valueClass, hint }: StatCardProps) {
+  return (
+    <div className="app-muted-panel rounded-xl border border-stone-200/80 px-4 py-3 dark:border-stone-700/70">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">{label}</p>
+      <p className={clsx('mt-1 text-2xl font-bold leading-none text-stone-900 dark:text-stone-100', valueClass)}>{value}</p>
+      {hint && <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">{hint}</p>}
+    </div>
+  );
+}
+
+interface ExecutionTableProps {
+  rows: Execution[];
+}
+
+function ExecutionTable({ rows }: ExecutionTableProps) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white/80 dark:border-stone-700 dark:bg-stone-900/50">
+      <table className="w-full min-w-[560px] text-sm">
+        <thead className="bg-stone-100/80 dark:bg-stone-800/80">
+          <tr className="text-left text-xs uppercase tracking-wide text-stone-500 dark:text-stone-400">
+            <th className="px-3 py-2.5 font-semibold">Date</th>
+            <th className="px-3 py-2.5 font-semibold">Time</th>
+            <th className="px-3 py-2.5 text-right font-semibold">Qty</th>
+            <th className="px-3 py-2.5 text-right font-semibold">Price</th>
+            <th className="px-3 py-2.5 text-right font-semibold">Fees</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((exec, i) => (
+            <tr key={i} className="border-t border-stone-200/70 text-stone-700 dark:border-stone-700/80 dark:text-stone-200">
+              <td className="px-3 py-2.5">{format(new Date(exec.execution_date), 'MMM d, yyyy')}</td>
+              <td className="px-3 py-2.5">{exec.execution_time || '-'}</td>
+              <td className="px-3 py-2.5 text-right font-medium">{exec.quantity}</td>
+              <td className="px-3 py-2.5 text-right font-medium">${exec.price.toFixed(2)}</td>
+              <td className="px-3 py-2.5 text-right font-medium">${exec.fees.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -44,19 +116,36 @@ export default function TradeDetail() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [executionsLoading, setExecutionsLoading] = useState(false);
+  const [selectionResolved, setSelectionResolved] = useState(false);
 
   const { selectedTrade, selectTrade, deleteTrade, fetchTrades, isLoading } = useTradesStore();
 
   useEffect(() => {
+    let isActive = true;
+    setSelectionResolved(false);
+
     if (id) {
-      selectTrade(id);
+      const selectionResult = selectTrade(id);
+      const done = () => {
+        if (isActive) {
+          setSelectionResolved(true);
+        }
+      };
+      if (selectionResult && typeof (selectionResult as Promise<void>).finally === 'function') {
+        void (selectionResult as Promise<void>).finally(done);
+      } else {
+        done();
+      }
+    } else {
+      setSelectionResolved(true);
     }
+
     return () => {
+      isActive = false;
       selectTrade(null);
     };
   }, [id, selectTrade]);
 
-  // Fetch executions when trade is loaded
   useEffect(() => {
     if (id) {
       setExecutionsLoading(true);
@@ -74,22 +163,24 @@ export default function TradeDetail() {
     }
   };
 
-  if (isLoading) {
+  const isTradePending = Boolean(id) && (!selectionResolved || (selectedTrade !== null && selectedTrade.id !== id));
+
+  if (isLoading || isTradePending) {
     return (
-      <div className="p-6">
-        <div className="text-center py-8 text-gray-500 dark:text-gray-400">Loading...</div>
+      <div className="mx-auto max-w-6xl p-4 md:p-6">
+        <div className="app-panel p-10 text-center text-stone-500 dark:text-stone-400">Loading...</div>
       </div>
     );
   }
 
   if (!selectedTrade) {
     return (
-      <div className="p-6">
-        <div className="text-center py-8 text-gray-500 dark:text-gray-400">Trade not found.</div>
-        <div className="text-center">
+      <div className="mx-auto max-w-6xl p-4 md:p-6">
+        <div className="app-panel p-10 text-center">
+          <div className="py-2 text-stone-500 dark:text-stone-400">Trade not found.</div>
           <button
             onClick={() => navigate('/trades')}
-            className="text-blue-600 dark:text-blue-400 hover:underline"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-50 dark:text-teal-300 dark:hover:bg-teal-900/30"
           >
             Back to trades
           </button>
@@ -100,7 +191,6 @@ export default function TradeDetail() {
 
   const trade = selectedTrade;
 
-  // Separate entries and exits
   const entries = executions.filter(e => e.execution_type === 'entry');
   const exits = executions.filter(e => e.execution_type === 'exit');
   const fallbackEntry: Execution[] =
@@ -120,59 +210,95 @@ export default function TradeDetail() {
   const showExecutionsSection = executionsLoading || displayEntries.length > 0 || exits.length > 0;
 
   return (
-    <div className="p-6 max-w-3xl">
-      <div className="flex justify-between items-center mb-6">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate(-1)}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-          >
-            &larr; Back
-          </button>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            {trade.symbol}
-            {trade.asset_class === 'option' && (
-              <span className="px-1.5 py-0.5 text-xs font-semibold bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded">
-                OPT
-              </span>
-            )}
-          </h1>
-          <span
-            className={clsx(
-              'px-2 py-1 rounded text-sm font-medium',
-              trade.direction === 'long'
-                ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200'
-                : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
-            )}
-          >
-            {trade.direction.toUpperCase()}
-          </span>
+    <div className="mx-auto max-w-6xl p-4 md:p-6 space-y-6 animate-fade-in">
+      <section className="app-panel overflow-hidden">
+        <div className="border-b border-stone-200 bg-gradient-to-r from-teal-50 via-amber-50 to-stone-50 px-4 py-5 dark:border-stone-700 dark:from-teal-950/40 dark:via-stone-900 dark:to-stone-900 md:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-2">
+              <button
+                onClick={() => navigate(-1)}
+                className="text-sm font-medium text-stone-500 transition-colors hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200"
+              >
+                &larr; Back
+              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-3xl font-bold tracking-tight text-stone-900 dark:text-stone-100">{trade.symbol}</h1>
+                {trade.asset_class === 'option' && (
+                  <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    OPT
+                  </span>
+                )}
+                <span
+                  className={clsx(
+                    'rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wider',
+                    trade.direction === 'long'
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+                      : 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300'
+                  )}
+                >
+                  {trade.direction.toUpperCase()}
+                </span>
+                <span className="rounded-full border border-stone-300 px-2.5 py-1 text-xs font-semibold uppercase tracking-wider text-stone-600 dark:border-stone-600 dark:text-stone-300">
+                  {trade.status.toUpperCase()}
+                </span>
+              </div>
+              <p className="text-sm text-stone-600 dark:text-stone-300">
+                Trade date {format(new Date(trade.trade_date), 'MMMM d, yyyy')}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setIsEditing(true)}
+                className="rounded-xl border border-stone-300 bg-white px-4 py-2 text-sm font-semibold text-stone-700 transition-colors hover:bg-stone-100 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-200 dark:hover:bg-stone-700"
+              >
+                Edit
+              </button>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition-colors hover:bg-rose-100 dark:border-rose-900/60 dark:bg-rose-900/30 dark:text-rose-300 dark:hover:bg-rose-900/50"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setIsEditing(true)}
-            className="px-4 py-2 text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => setShowDeleteConfirm(true)}
-            className="px-4 py-2 text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/30 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
-          >
-            Delete
-          </button>
+
+        <div className="grid gap-3 p-4 md:grid-cols-2 md:gap-4 md:p-6 lg:grid-cols-4">
+          <StatCard
+            label="Net Result"
+            value={formatCompactCurrency(trade.net_pnl)}
+            valueClass={pnlClass(trade.net_pnl)}
+            hint={trade.result ? `Marked as ${trade.result.toUpperCase()}` : undefined}
+          />
+          <StatCard
+            label="Gross Result"
+            value={formatCompactCurrency(trade.gross_pnl)}
+            valueClass={pnlClass(trade.gross_pnl)}
+          />
+          <StatCard
+            label="R Score"
+            value={trade.r_multiple === null ? '-' : `${formatNumber(trade.r_multiple)}R`}
+            valueClass={pnlClass(trade.r_multiple)}
+            hint="Reward-to-risk ratio"
+          />
+          <StatCard
+            label="Position Size"
+            value={trade.quantity ? `${trade.quantity} ${trade.asset_class === 'option' ? 'contracts' : 'shares'}` : '-'}
+            hint={trade.asset_class === 'option' ? 'Contracts' : 'Shares'}
+          />
         </div>
-      </div>
+      </section>
 
       {/* Edit Form Modal */}
       {isEditing && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-auto">
-            <div className="p-4 border-b dark:border-gray-700 flex justify-between items-center">
-              <h2 className="text-lg font-semibold dark:text-gray-100">Edit Trade</h2>
+        <div className="animate-modal-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div className="app-panel animate-modal-pop-in max-h-[90vh] w-full max-w-2xl overflow-auto">
+            <div className="flex items-center justify-between border-b border-stone-200 p-4 dark:border-stone-700">
+              <h2 className="text-lg font-semibold dark:text-stone-100">Edit Trade</h2>
               <button
                 onClick={() => setIsEditing(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                className="rounded-md px-2 py-1 text-stone-400 transition-colors hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-stone-800 dark:hover:text-stone-300"
               >
                 &times;
               </button>
@@ -195,22 +321,22 @@ export default function TradeDetail() {
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 max-w-md">
-            <h2 className="text-lg font-semibold dark:text-gray-100 mb-4">Delete Trade?</h2>
-            <p className="text-gray-600 dark:text-gray-300 mb-6">
+        <div className="animate-modal-backdrop-in fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
+          <div className="app-panel animate-modal-pop-in w-full max-w-md p-6">
+            <h2 className="mb-3 text-lg font-semibold dark:text-stone-100">Delete Trade?</h2>
+            <p className="mb-6 text-sm text-stone-600 dark:text-stone-300">
               Are you sure you want to delete this trade? This action cannot be undone.
             </p>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                className="px-4 py-2 text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+                className="rounded-xl border border-stone-300 bg-stone-50 px-4 py-2 text-sm font-medium text-stone-700 transition-colors hover:bg-stone-100 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-200 dark:hover:bg-stone-700"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDelete}
-                className="px-4 py-2 text-white bg-red-600 rounded-lg hover:bg-red-700"
+                className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-rose-700"
               >
                 Delete
               </button>
@@ -219,187 +345,77 @@ export default function TradeDetail() {
         </div>
       )}
 
-      {/* Trade Details */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Input Fields */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <h2 className="text-lg font-semibold dark:text-gray-100 mb-4">Trade Details</h2>
-          <DetailRow
-            label="Asset Type"
-            value={trade.asset_class === 'option' ? 'Option' : 'Stock'}
-          />
-          <DetailRow
-            label="Date"
-            value={format(new Date(trade.trade_date), 'MMMM d, yyyy')}
-          />
-          <DetailRow label="Entry Price" value={`$${trade.entry_price.toFixed(2)}`} />
-          <DetailRow
-            label="Exit Price"
-            value={trade.exit_price ? `$${trade.exit_price.toFixed(2)}` : '-'}
-          />
-          <DetailRow label="Quantity" value={trade.quantity?.toString() ?? '-'} />
-          <DetailRow
-            label="Stop Loss"
-            value={trade.stop_loss_price ? `$${trade.stop_loss_price.toFixed(2)}` : '-'}
-          />
-          <DetailRow label="Fees" value={formatCurrency(trade.fees)} />
-          <DetailRow label="Strategy" value={trade.strategy ?? '-'} />
-          <DetailRow label="Status" value={trade.status.toUpperCase()} />
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="app-panel p-4 md:p-5">
+          <h2 className="mb-2 text-lg font-semibold text-stone-900 dark:text-stone-100">Trade Details</h2>
+          <p className="mb-4 text-xs uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">Execution Inputs</p>
+          <div className="space-y-1">
+            <DetailRow label="Asset Type" value={trade.asset_class === 'option' ? 'Option' : 'Stock'} />
+            <DetailRow label="Date" value={format(new Date(trade.trade_date), 'MMMM d, yyyy')} />
+            <DetailRow label="Entry Price" value={`$${trade.entry_price.toFixed(2)}`} />
+            <DetailRow label="Exit Price" value={trade.exit_price ? `$${trade.exit_price.toFixed(2)}` : '-'} />
+            <DetailRow label="Quantity" value={trade.quantity?.toString() ?? '-'} />
+            <DetailRow label="Stop Loss" value={trade.stop_loss_price ? `$${trade.stop_loss_price.toFixed(2)}` : '-'} />
+            <DetailRow label="Fees" value={formatCurrency(trade.fees)} />
+            <DetailRow label="Strategy" value={trade.strategy ?? '-'} />
+            <DetailRow label="Status" value={trade.status.toUpperCase()} />
+          </div>
         </div>
 
-        {/* Derived Fields */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <h2 className="text-lg font-semibold dark:text-gray-100 mb-4">Performance</h2>
-          <DetailRow
-            label="Result"
-            value={trade.result?.toUpperCase() ?? '-'}
-            valueClass={
-              trade.result === 'win'
-                ? 'text-green-600 dark:text-green-400'
-                : trade.result === 'loss'
-                ? 'text-red-600 dark:text-red-400'
-                : ''
-            }
-          />
-          <DetailRow
-            label="Gross P&L"
-            value={formatCurrency(trade.gross_pnl)}
-            valueClass={
-              (trade.gross_pnl ?? 0) > 0
-                ? 'text-green-600 dark:text-green-400'
-                : (trade.gross_pnl ?? 0) < 0
-                ? 'text-red-600 dark:text-red-400'
-                : ''
-            }
-          />
-          <DetailRow
-            label="Net P&L"
-            value={formatCurrency(trade.net_pnl)}
-            valueClass={
-              (trade.net_pnl ?? 0) > 0
-                ? 'text-green-600 dark:text-green-400'
-                : (trade.net_pnl ?? 0) < 0
-                ? 'text-red-600 dark:text-red-400'
-                : ''
-            }
-          />
-          <DetailRow
-            label="P&L per Share"
-            value={trade.pnl_per_share ? `$${trade.pnl_per_share.toFixed(2)}` : '-'}
-          />
-          <DetailRow
-            label="Risk per Share"
-            value={trade.risk_per_share ? `$${trade.risk_per_share.toFixed(2)}` : '-'}
-          />
-          <DetailRow label="R-Multiple" value={formatNumber(trade.r_multiple)} />
+        <div className="app-panel p-4 md:p-5">
+          <h2 className="mb-2 text-lg font-semibold text-stone-900 dark:text-stone-100">Performance</h2>
+          <p className="mb-4 text-xs uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">Derived Metrics</p>
+          <div className="space-y-1">
+            <DetailRow label="Result" value={trade.result?.toUpperCase() ?? '-'} valueClass={resultClass(trade.result)} />
+            <DetailRow label="Gross P&L" value={formatCurrency(trade.gross_pnl)} valueClass={pnlClass(trade.gross_pnl)} />
+            <DetailRow label="Net P&L" value={formatCurrency(trade.net_pnl)} valueClass={pnlClass(trade.net_pnl)} />
+            <DetailRow
+              label="P&L per Share"
+              value={trade.pnl_per_share ? `$${trade.pnl_per_share.toFixed(2)}` : '-'}
+              valueClass={pnlClass(trade.pnl_per_share)}
+            />
+            <DetailRow
+              label="Risk per Share"
+              value={trade.risk_per_share ? `$${trade.risk_per_share.toFixed(2)}` : '-'}
+            />
+            <DetailRow label="R-Multiple" value={formatNumber(trade.r_multiple)} valueClass={pnlClass(trade.r_multiple)} />
+          </div>
         </div>
-      </div>
+      </section>
 
-      {/* Executions Section */}
       {showExecutionsSection && (
-        <div className="mt-6 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <h2 className="text-lg font-semibold dark:text-gray-100 mb-4">Executions</h2>
+        <section className="app-panel p-4 md:p-5">
+          <h2 className="mb-4 text-lg font-semibold text-stone-900 dark:text-stone-100">Executions</h2>
 
           {executionsLoading ? (
-            <p className="text-gray-500 dark:text-gray-400 text-sm">Loading executions...</p>
+            <p className="text-sm text-stone-500 dark:text-stone-400">Loading executions...</p>
           ) : (
-            <div className="space-y-4">
-              {/* Entries */}
+            <div className="space-y-5">
               {displayEntries.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">
-                    Entries ({displayEntries.length})
-                  </h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-gray-500 dark:text-gray-400 border-b dark:border-gray-700">
-                          <th className="pb-2 font-medium">Date</th>
-                          <th className="pb-2 font-medium">Time</th>
-                          <th className="pb-2 font-medium text-right">Qty</th>
-                          <th className="pb-2 font-medium text-right">Price</th>
-                          <th className="pb-2 font-medium text-right">Fees</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayEntries.map((exec, i) => (
-                          <tr key={i} className="border-b dark:border-gray-700 last:border-0">
-                            <td className="py-2 dark:text-gray-300">
-                              {format(new Date(exec.execution_date), 'MMM d, yyyy')}
-                            </td>
-                            <td className="py-2 dark:text-gray-300">
-                              {exec.execution_time || '-'}
-                            </td>
-                            <td className="py-2 text-right dark:text-gray-300">
-                              {exec.quantity}
-                            </td>
-                            <td className="py-2 text-right dark:text-gray-300">
-                              ${exec.price.toFixed(2)}
-                            </td>
-                            <td className="py-2 text-right dark:text-gray-300">
-                              ${exec.fees.toFixed(2)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-stone-600 dark:text-stone-300">Entries ({displayEntries.length})</h3>
+                  <ExecutionTable rows={displayEntries} />
                 </div>
               )}
 
-              {/* Exits */}
               {exits.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">
-                    Exits ({exits.length})
-                  </h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-gray-500 dark:text-gray-400 border-b dark:border-gray-700">
-                          <th className="pb-2 font-medium">Date</th>
-                          <th className="pb-2 font-medium">Time</th>
-                          <th className="pb-2 font-medium text-right">Qty</th>
-                          <th className="pb-2 font-medium text-right">Price</th>
-                          <th className="pb-2 font-medium text-right">Fees</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {exits.map((exec, i) => (
-                          <tr key={i} className="border-b dark:border-gray-700 last:border-0">
-                            <td className="py-2 dark:text-gray-300">
-                              {format(new Date(exec.execution_date), 'MMM d, yyyy')}
-                            </td>
-                            <td className="py-2 dark:text-gray-300">
-                              {exec.execution_time || '-'}
-                            </td>
-                            <td className="py-2 text-right dark:text-gray-300">
-                              {exec.quantity}
-                            </td>
-                            <td className="py-2 text-right dark:text-gray-300">
-                              ${exec.price.toFixed(2)}
-                            </td>
-                            <td className="py-2 text-right dark:text-gray-300">
-                              ${exec.fees.toFixed(2)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                <div className="space-y-2">
+                  <h3 className="text-sm font-semibold text-stone-600 dark:text-stone-300">Exits ({exits.length})</h3>
+                  <ExecutionTable rows={exits} />
                 </div>
               )}
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      {/* Notes */}
       {trade.notes && (
-        <div className="mt-6 bg-white dark:bg-gray-800 rounded-lg shadow p-4">
-          <h2 className="text-lg font-semibold dark:text-gray-100 mb-4">Notes</h2>
-          <p className="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{trade.notes}</p>
-        </div>
+        <section className="app-panel p-4 md:p-5">
+          <h2 className="mb-3 text-lg font-semibold text-stone-900 dark:text-stone-100">Notes</h2>
+          <div className="rounded-xl border-l-4 border-amber-400 bg-amber-50/70 p-4 dark:border-amber-500/70 dark:bg-amber-950/20">
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-stone-700 dark:text-stone-200">{trade.notes}</p>
+          </div>
+        </section>
       )}
     </div>
   );
