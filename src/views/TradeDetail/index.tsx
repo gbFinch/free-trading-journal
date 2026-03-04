@@ -8,6 +8,7 @@ import { getTradeCandles } from '@/api/market';
 import TradeForm from '@/components/TradeForm';
 import TradeCandleChart from '@/components/TradeCandleChart';
 import SynchronizedCandleCharts from '@/components/SynchronizedCandleCharts';
+import IntratradePnlCurve from '@/components/IntratradePnlCurve';
 import clsx from 'clsx';
 import type { Candle, CandleTimeframe, Execution } from '@/types';
 
@@ -76,6 +77,23 @@ function toExecutionUtcDate(executionDate: string, executionTime?: string | null
   const time = executionTime && executionTime.trim().length > 0 ? executionTime : '00:00:00';
   const safeTime = time.includes(':') ? time : '00:00:00';
   return new Date(`${executionDate}T${safeTime}Z`);
+}
+
+function parseTimeToUtcSeconds(date: string, time?: string | null): number | null {
+  if (!date) return null;
+  const raw = (time ?? '').trim();
+  const base = raw.length > 0 ? raw : '09:30:00';
+  const clean = base.split('.')[0];
+  const parts = clean.split(':');
+  const hour = Number(parts[0] ?? '9');
+  const minute = Number(parts[1] ?? '30');
+  const second = Number(parts[2] ?? '0');
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second)) {
+    return null;
+  }
+  const [year, month, day] = date.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return Math.floor(Date.UTC(year, month - 1, day, hour, minute, second) / 1000);
 }
 
 function formatExecutionDateNY(executionDate: string, executionTime?: string | null): string {
@@ -347,6 +365,160 @@ export default function TradeDetail() {
   const displayEntries = entries.length > 0 ? entries : fallbackEntry;
   const showExecutionsSection = executionsLoading || displayEntries.length > 0 || exits.length > 0;
 
+  const effectiveQuantity = trade.quantity
+    ?? (entries.length > 0 ? entries.reduce((sum, entry) => sum + entry.quantity, 0) : null);
+
+  const tradeStartTs = (() => {
+    if (entries.length > 0) {
+      const entryTimes = entries
+        .map((entry) => parseTimeToUtcSeconds(entry.execution_date, entry.execution_time))
+        .filter((v): v is number => v !== null);
+      if (entryTimes.length > 0) return Math.min(...entryTimes);
+    }
+    return parseTimeToUtcSeconds(trade.trade_date, trade.entry_time);
+  })();
+
+  const tradeEndTs = (() => {
+    if (exits.length > 0) {
+      const exitTimes = exits
+        .map((exit) => parseTimeToUtcSeconds(exit.execution_date, exit.execution_time))
+        .filter((v): v is number => v !== null);
+      if (exitTimes.length > 0) return Math.max(...exitTimes);
+    }
+    if (trade.exit_time) {
+      return parseTimeToUtcSeconds(trade.trade_date, trade.exit_time);
+    }
+    if (baseCandles.length > 0) {
+      return baseCandles[baseCandles.length - 1].time;
+    }
+    return null;
+  })();
+
+  const candlesWithinTrade = (() => {
+    if (tradeStartTs === null || tradeEndTs === null) return [];
+    const start = Math.min(tradeStartTs, tradeEndTs);
+    const end = Math.max(tradeStartTs, tradeEndTs);
+    return baseCandles.filter((candle) => candle.time >= start && candle.time <= end);
+  })();
+
+  const maeMfe = (() => {
+    if (candlesWithinTrade.length === 0) {
+      return { maePerShare: null, mfePerShare: null, maeTotal: null, mfeTotal: null };
+    }
+    const minLow = Math.min(...candlesWithinTrade.map((candle) => candle.low));
+    const maxHigh = Math.max(...candlesWithinTrade.map((candle) => candle.high));
+    const entry = trade.entry_price;
+
+    const maePerShare = trade.direction === 'long'
+      ? Math.max(0, entry - minLow)
+      : Math.max(0, maxHigh - entry);
+    const mfePerShare = trade.direction === 'long'
+      ? Math.max(0, maxHigh - entry)
+      : Math.max(0, entry - minLow);
+
+    const positionMultiplier = effectiveQuantity !== null ? effectiveQuantity * multiplier : null;
+
+    return {
+      maePerShare,
+      mfePerShare,
+      maeTotal: positionMultiplier !== null ? maePerShare * positionMultiplier : null,
+      mfeTotal: positionMultiplier !== null ? mfePerShare * positionMultiplier : null,
+    };
+  })();
+
+  const formatExcursionValue = (perShare: number | null, total: number | null): string => {
+    if (perShare === null) return '-';
+    const perShareText = `$${perShare.toFixed(2)} /share`;
+    if (total === null) return perShareText;
+    return `${perShareText} (${formatCurrency(total)})`;
+  };
+
+  const intratradePnlPoints = (() => {
+    if (baseCandles.length === 0) return [];
+
+    type ExecPoint = {
+      time: number;
+      type: 'entry' | 'exit';
+      qty: number;
+      price: number;
+      fees: number;
+    };
+
+    const execPoints: ExecPoint[] = executions
+      .map((execution) => ({
+        time: parseTimeToUtcSeconds(execution.execution_date, execution.execution_time),
+        type: execution.execution_type === 'exit' ? 'exit' : 'entry',
+        qty: execution.quantity,
+        price: execution.price,
+        fees: execution.fees ?? 0,
+      }))
+      .filter((point): point is ExecPoint & { time: number } => point.time !== null)
+      .sort((a, b) => a.time - b.time);
+
+    const fallbackEntryTs = parseTimeToUtcSeconds(trade.trade_date, trade.entry_time);
+    if (execPoints.length === 0 && fallbackEntryTs !== null && trade.quantity && trade.quantity > 0) {
+      execPoints.push({
+        time: fallbackEntryTs,
+        type: 'entry',
+        qty: trade.quantity,
+        price: trade.entry_price,
+        fees: trade.fees ?? 0,
+      });
+    }
+
+    if (execPoints.length === 0) return [];
+
+    const firstEntry = execPoints.find((p) => p.type === 'entry');
+    const startTs = firstEntry ? firstEntry.time : execPoints[0].time;
+    const lastExec = execPoints[execPoints.length - 1];
+    const endTs = lastExec.time;
+
+    const candlesInWindow = baseCandles.filter((candle) => candle.time >= startTs && candle.time <= endTs);
+    if (candlesInWindow.length === 0) return [];
+
+    const dirSign = trade.direction === 'long' ? 1 : -1;
+    const contractMultiplier = trade.asset_class === 'option' ? 100 : 1;
+
+    let execIndex = 0;
+    let openQty = 0;
+    let avgEntry = 0;
+    let realized = 0;
+
+    const points: Array<{ time: number; pnl: number; remainingSize: number }> = [];
+
+    for (const candle of candlesInWindow) {
+      while (execIndex < execPoints.length && execPoints[execIndex].time <= candle.time) {
+        const exec = execPoints[execIndex];
+        if (exec.type === 'entry') {
+          const newQty = openQty + exec.qty;
+          avgEntry = newQty > 0
+            ? ((avgEntry * openQty) + (exec.price * exec.qty)) / newQty
+            : exec.price;
+          openQty = newQty;
+          realized -= exec.fees;
+        } else {
+          const matchedQty = Math.min(openQty, exec.qty);
+          if (matchedQty > 0) {
+            realized += dirSign * (exec.price - avgEntry) * matchedQty * contractMultiplier;
+          }
+          realized -= exec.fees;
+          openQty = Math.max(0, openQty - exec.qty);
+          if (openQty === 0) {
+            avgEntry = 0;
+          }
+        }
+        execIndex += 1;
+      }
+
+      const unrealized = openQty > 0
+        ? dirSign * (candle.close - avgEntry) * openQty * contractMultiplier
+        : 0;
+      points.push({ time: candle.time, pnl: realized + unrealized, remainingSize: openQty });
+    }
+
+    return points;
+  })();
+
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-6 space-y-6 animate-fade-in">
       <section className="app-panel overflow-hidden">
@@ -533,7 +705,23 @@ export default function TradeDetail() {
               label="Risk per Share"
               value={trade.risk_per_share ? `$${trade.risk_per_share.toFixed(2)}` : '-'}
             />
+            <DetailRow
+              label="MAE"
+              value={formatExcursionValue(maeMfe.maePerShare, maeMfe.maeTotal)}
+              valueClass="text-rose-600 dark:text-rose-400"
+            />
+            <DetailRow
+              label="MFE"
+              value={formatExcursionValue(maeMfe.mfePerShare, maeMfe.mfeTotal)}
+              valueClass="text-emerald-600 dark:text-emerald-400"
+            />
             <DetailRow label="R-Multiple" value={formatNumber(trade.r_multiple)} valueClass={pnlClass(trade.r_multiple)} />
+          </div>
+          <div className="mt-4">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">
+              Intratrade P&amp;L Path
+            </p>
+            <IntratradePnlCurve data={intratradePnlPoints} />
           </div>
         </div>
       </section>

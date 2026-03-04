@@ -72,6 +72,41 @@ function formatNyTime(unixSeconds: number, includeDate = false): string {
   }).format(new Date(unixSeconds * 1000));
 }
 
+function getTradeVisibleRange(
+  executions: Execution[],
+  chartData: CandlestickData[],
+): { from: UTCTimestamp; to: UTCTimestamp } | null {
+  const executionTimes = executions
+    .map(toExecutionTimestamp)
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+
+  if (executionTimes.length === 0) {
+    return null;
+  }
+
+  const dataTimes = chartData.map((point) => Number(point.time)).sort((a, b) => a - b);
+  if (dataTimes.length === 0) {
+    return null;
+  }
+
+  const firstData = dataTimes[0];
+  const lastData = dataTimes[dataTimes.length - 1];
+  const fromExec = executionTimes[0];
+  const toExec = executionTimes[executionTimes.length - 1];
+
+  const sampleStep = dataTimes.length > 1 ? Math.max(60, dataTimes[1] - dataTimes[0]) : 60;
+  const padding = sampleStep * 2;
+  const from = Math.max(firstData, fromExec - padding);
+  const to = Math.min(lastData, toExec + padding);
+  if (to < from) return null;
+
+  return {
+    from: from as UTCTimestamp,
+    to: to as UTCTimestamp,
+  };
+}
+
 export default function TradeCandleChart({
   candles,
   executions,
@@ -213,7 +248,6 @@ export default function TradeCandleChart({
         width: Math.max(320, containerRef.current.clientWidth || 320),
         height: Math.max(260, containerRef.current.clientHeight || 360),
       });
-      chart.timeScale().fitContent();
     });
     resizeObserver.observe(containerRef.current);
 
@@ -239,6 +273,35 @@ export default function TradeCandleChart({
       chartRef.current = null;
       seriesRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.applyOptions({
+      layout: {
+        background: {
+          type: ColorType.Solid,
+          color: isDark ? '#020617' : '#ffffff',
+        },
+        textColor: isDark ? '#cbd5e1' : '#334155',
+      },
+      grid: {
+        vertLines: { color: isDark ? '#1e293b' : '#e2e8f0' },
+        horzLines: { color: isDark ? '#1e293b' : '#e2e8f0' },
+      },
+      rightPriceScale: {
+        borderColor: isDark ? '#334155' : '#cbd5e1',
+      },
+      timeScale: {
+        borderColor: isDark ? '#334155' : '#cbd5e1',
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: isDark ? '#64748b' : '#94a3b8' },
+        horzLine: { color: isDark ? '#64748b' : '#94a3b8' },
+      },
+    });
   }, [isDark]);
 
   useEffect(() => {
@@ -314,7 +377,12 @@ export default function TradeCandleChart({
       }
     }
 
-    chart.timeScale().fitContent();
+    const preferredRange = getTradeVisibleRange(executions, chartData);
+    if (preferredRange) {
+      chart.timeScale().setVisibleRange(preferredRange);
+    } else {
+      chart.timeScale().fitContent();
+    }
   }, [chartData, markers, isDark, direction, entryPrice, stopLossPrice]);
 
   return (
