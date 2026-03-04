@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import TradeDetail from "./index";
 import { useTradesStore } from "@/stores";
-import type { TradeWithDerived } from "@/types";
+import { getTradeExecutions } from "@/api/import";
+import type { Execution, TradeWithDerived } from "@/types";
 
 const mockNavigate = vi.fn();
 
@@ -66,6 +67,7 @@ describe("TradeDetail", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getTradeExecutions).mockResolvedValue([]);
   });
 
   describe("loading state", () => {
@@ -198,6 +200,48 @@ describe("TradeDetail", () => {
       expect(await screen.findByText("Entries (1)")).toBeInTheDocument();
       expect(screen.getByText("Qty")).toBeInTheDocument();
       expect(screen.getByText("Price")).toBeInTheDocument();
+    });
+
+    it("displays per-scale PnL contribution for exits", async () => {
+      const executions: Execution[] = [
+        {
+          execution_type: "entry",
+          execution_date: "2024-01-15",
+          execution_time: "09:30:00",
+          quantity: 100,
+          price: 150,
+          fees: 2,
+          exchange: null,
+          broker_execution_id: "entry-1",
+        },
+        {
+          execution_type: "exit",
+          execution_date: "2024-01-15",
+          execution_time: "10:00:00",
+          quantity: 60,
+          price: 155,
+          fees: 0.6,
+          exchange: null,
+          broker_execution_id: "exit-1",
+        },
+        {
+          execution_type: "exit",
+          execution_date: "2024-01-15",
+          execution_time: "10:30:00",
+          quantity: 40,
+          price: 160,
+          fees: 0.4,
+          exchange: null,
+          broker_execution_id: "exit-2",
+        },
+      ];
+      vi.mocked(getTradeExecutions).mockResolvedValueOnce(executions);
+
+      render(<TradeDetail />);
+
+      expect(await screen.findByText("Scale P&L")).toBeInTheDocument();
+      expect(screen.getByText("$298.20")).toBeInTheDocument();
+      expect(screen.getByText("$398.80")).toBeInTheDocument();
     });
 
     it("displays R-Multiple", () => {

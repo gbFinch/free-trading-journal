@@ -70,7 +70,7 @@ function StatCard({ label, value, valueClass, hint }: StatCardProps) {
   return (
     <div className="app-muted-panel rounded-xl border border-stone-200/80 px-4 py-3 dark:border-stone-700/70">
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-500 dark:text-stone-400">{label}</p>
-      <p className={clsx('mt-1 text-2xl font-bold leading-none text-stone-900 dark:text-stone-100', valueClass)}>{value}</p>
+      <p className={clsx('mt-1 text-2xl font-bold leading-none', valueClass ?? 'text-stone-900 dark:text-stone-100')}>{value}</p>
       {hint && <p className="mt-2 text-xs text-stone-500 dark:text-stone-400">{hint}</p>}
     </div>
   );
@@ -78,9 +78,11 @@ function StatCard({ label, value, valueClass, hint }: StatCardProps) {
 
 interface ExecutionTableProps {
   rows: Execution[];
+  pnlByRow?: Array<number | null>;
+  pnlLabel?: string;
 }
 
-function ExecutionTable({ rows }: ExecutionTableProps) {
+function ExecutionTable({ rows, pnlByRow, pnlLabel = 'Scale P&L' }: ExecutionTableProps) {
   return (
     <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white/80 dark:border-stone-700 dark:bg-stone-900/50">
       <table className="w-full min-w-[560px] text-sm">
@@ -91,6 +93,7 @@ function ExecutionTable({ rows }: ExecutionTableProps) {
             <th className="px-3 py-2.5 text-right font-semibold">Qty</th>
             <th className="px-3 py-2.5 text-right font-semibold">Price</th>
             <th className="px-3 py-2.5 text-right font-semibold">Fees</th>
+            {pnlByRow && <th className="px-3 py-2.5 text-right font-semibold">{pnlLabel}</th>}
           </tr>
         </thead>
         <tbody>
@@ -101,6 +104,11 @@ function ExecutionTable({ rows }: ExecutionTableProps) {
               <td className="px-3 py-2.5 text-right font-medium">{exec.quantity}</td>
               <td className="px-3 py-2.5 text-right font-medium">${exec.price.toFixed(2)}</td>
               <td className="px-3 py-2.5 text-right font-medium">${exec.fees.toFixed(2)}</td>
+              {pnlByRow && (
+                <td className={clsx('px-3 py-2.5 text-right font-semibold', pnlClass(pnlByRow[i]))}>
+                  {formatCurrency(pnlByRow[i] ?? null)}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -193,6 +201,20 @@ export default function TradeDetail() {
 
   const entries = executions.filter(e => e.execution_type === 'entry');
   const exits = executions.filter(e => e.execution_type === 'exit');
+  const resultPnlClass = pnlClass(trade.net_pnl ?? trade.gross_pnl);
+  const multiplier = trade.asset_class === 'option' ? 100 : 1;
+  const directionMultiplier = trade.direction === 'long' ? 1 : -1;
+  const entryQtyTotal = entries.reduce((sum, entry) => sum + entry.quantity, 0);
+  const entryValueTotal = entries.reduce((sum, entry) => sum + (entry.quantity * entry.price), 0);
+  const entryFeesTotal = entries.reduce((sum, entry) => sum + entry.fees, 0);
+  const avgEntryPrice = entryQtyTotal > 0 ? entryValueTotal / entryQtyTotal : trade.entry_price;
+  const totalExitQty = exits.reduce((sum, exit) => sum + exit.quantity, 0);
+  const exitScalePnls = exits.map((exit) => {
+    const grossScalePnl = directionMultiplier * (exit.price - avgEntryPrice) * exit.quantity * multiplier;
+    const allocatedEntryFees = totalExitQty > 0 ? (entryFeesTotal * exit.quantity) / totalExitQty : 0;
+    return grossScalePnl - exit.fees - allocatedEntryFees;
+  });
+
   const fallbackEntry: Execution[] =
     executionsLoading || entries.length > 0 || !trade.quantity
       ? []
@@ -268,13 +290,13 @@ export default function TradeDetail() {
           <StatCard
             label="Net Result"
             value={formatCompactCurrency(trade.net_pnl)}
-            valueClass={pnlClass(trade.net_pnl)}
+            valueClass={resultPnlClass}
             hint={trade.result ? `Marked as ${trade.result.toUpperCase()}` : undefined}
           />
           <StatCard
             label="Gross Result"
             value={formatCompactCurrency(trade.gross_pnl)}
-            valueClass={pnlClass(trade.gross_pnl)}
+            valueClass={resultPnlClass}
           />
           <StatCard
             label="R Score"
@@ -401,7 +423,7 @@ export default function TradeDetail() {
               {exits.length > 0 && (
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold text-stone-600 dark:text-stone-300">Exits ({exits.length})</h3>
-                  <ExecutionTable rows={exits} />
+                  <ExecutionTable rows={exits} pnlByRow={exitScalePnls} />
                 </div>
               )}
             </div>
